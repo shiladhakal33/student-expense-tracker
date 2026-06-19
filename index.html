@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SmartSpend — Student Expense Manager</title>
+  <meta name="description" content="SmartSpend helps students track expenses, set budgets, and understand spending habits." />
+
+  <!-- Fonts: Sora for display/headings, Inter for body & UI -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+  <!-- Chart.js via CDN for the Analytics page -->
+<script src="chart.js"></script>
+
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- ============================================================
+       VIEW 1 — AUTHENTICATION (Login / Register)
+       ============================================================ -->
+  <main id="view-auth" class="view view-auth" aria-label="Authentication">
+    <div class="auth-backdrop" aria-hidden="true">
+      <svg class="auth-ring" viewBox="0 0 200 200" aria-hidden="true">
+        <circle cx="100" cy="100" r="86" />
+      </svg>
+    </div>
+
+    <section class="auth-card" role="region" aria-labelledby="auth-heading">
+      <div class="auth-brand">
+        <span class="brand-mark" aria-hidden="true">S</span>
+        <div>
+          <p id="auth-heading" class="brand-name">SmartSpend</p>
+          <p class="brand-tag">Know where every rupee goes.</p>
+        </div>
+      </div>
+
+      <!-- Toggle between Login and Register -->
+      <div class="auth-toggle" role="tablist" aria-label="Choose login or register">
+        <button type="button" class="auth-toggle-btn is-active" id="tab-login" role="tab" aria-selected="true" aria-controls="form-login">Log in</button>
+        <button type="button" class="auth-toggle-btn" id="tab-register" role="tab" aria-selected="false" aria-controls="form-register">Register</button>
+        <span class="auth-toggle-pill" id="auth-toggle-pill" aria-hidden="true"></span>
+      </div>
+
+      <!-- Inline status message area (errors / success) -->
+      <p class="auth-message" id="auth-message" role="alert" aria-live="polite"></p>
+
+      <!-- LOGIN FORM -->
+      <form id="form-login" class="auth-form" novalidate>
+        <div class="field">
+          <label for="login-username">Email or username</label>
+          <input
+            type="text"
+            id="login-username"
+            name="username"
+            autocomplete="username"
+            placeholder="e.g. demo or demo@university.edu"
+            required
+            minlength="3"
+          />
+          <p class="field-hint" data-hint-for="login-username"></p>
+        </div>
+
+        <div class="field">
+          <label for="login-password">Password</label>
+          <div class="password-wrap">
+            <input
+              type="password"
+              id="login-password"
+              name="password"
+              autocomplete="current-password"
+              placeholder="Enter your password"
+              required
+              minlength="6"
+            />
+            <button type="button" class="pw-toggle" data-target="login-password" aria-label="Show password">👁</button>
+          </div>
+          <p class="field-hint" data-hint-for="login-password"></p>
+        </div>
+
+        <button type="button" class="link-btn forgot-link" id="open-forgot">Forgot password?</button>
+
+        <button type="submit" class="btn btn-primary btn-block">Log in</button>
+      </form>
+
+      <!-- REGISTER FORM -->
+      <form id="form-register" class="auth-form is-hidden" novalidate>
+        <div class="field">
+          <label for="reg-username">Username</label>
+          <input
+            type="text"
+            id="reg-username"
+            name="username"
+            autocomplete="username"
+            placeholder="Pick a username"
+            required
+            minlength="3"
+            maxlength="24"
+            pattern="^[A-Za-z0-9_]+$"
+          />
+          <p class="field-hint" data-hint-for="reg-username">3–24 characters: letters, numbers, underscore only.</p>
+        </div>
+
+        <div class="field">
+          <label for="reg-email">Email</label>
+          <input
+            type="email"
+            id="reg-email"
+            name="email"
+            autocomplete="email"
+            placeholder="you@university.edu"
+            required
+          />
+          <p class="field-hint" data-hint-for="reg-email"></p>
+        </div>
+
+        <div class="field">
+          <label for="reg-password">Password</label>
+          <div class="password-wrap">
+            <input
+              type="password"
+              id="reg-password"
+              name="password"
+              autocomplete="new-password"
+              placeholder="At least 6 characters"
+              required
+              minlength="6"
+            />
+            <button type="button" class="pw-toggle" data-target="reg-password" aria-label="Show password">👁</button>
+          </div>
+          <p class="field-hint" data-hint-for="reg-password">Use 6 or more characters. Mix in a number for a stronger password.</p>
+        </div>
+
+        <div class="field">
+          <label for="reg-password-confirm">Confirm password</label>
+          <input
+            type="password"
+            id="reg-password-confirm"
+            name="passwordConfirm"
+            autocomplete="new-password"
+            placeholder="Re-enter your password"
+            required
+            minlength="6"
+          />
+          <p class="field-hint" data-hint-for="reg-password-confirm"></p>
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-block">Create account</button>
+      </form>
+
+      <p class="auth-footnote">Your data stays in this browser — nothing is sent to a server in this prototype.</p>
+    </section>
+
+    <!-- FORGOT PASSWORD MODAL -->
+    <div class="modal-overlay is-hidden" id="modal-forgot" role="dialog" aria-modal="true" aria-labelledby="forgot-title">
+      <div class="modal-card modal-card-small">
+        <button class="modal-close" type="button" data-close-modal="modal-forgot" aria-label="Close">✕</button>
+        <h2 id="forgot-title">Reset your password</h2>
+        <p class="modal-sub">Enter the username you registered with. We'll check our records and let you set a new password.</p>
+
+        <form id="form-forgot-find" class="modal-form">
+          <div class="field">
+            <label for="forgot-username">Username</label>
+            <input type="text" id="forgot-username" name="username" required minlength="3" placeholder="Your username" />
+          </div>
+          <p class="auth-message" id="forgot-message" role="alert" aria-live="polite"></p>
+          <button type="submit" class="btn btn-primary btn-block">Find account</button>
+        </form>
+
+        <form id="form-forgot-reset" class="modal-form is-hidden">
+          <p class="modal-sub" id="forgot-found-msg"></p>
+          <div class="field">
+            <label for="forgot-new-password">New password</label>
+            <input type="password" id="forgot-new-password" name="newPassword" required minlength="6" placeholder="At least 6 characters" />
+          </div>
+          <div class="field">
+            <label for="forgot-new-password-confirm">Confirm new password</label>
+            <input type="password" id="forgot-new-password-confirm" name="newPasswordConfirm" required minlength="6" placeholder="Re-enter new password" />
+          </div>
+          <button type="submit" class="btn btn-primary btn-block">Set new password</button>
+        </form>
+      </div>
+    </div>
+  </main>
+
+
+  <!-- ============================================================
+       APP SHELL — shown once authenticated. Wraps Dashboard,
+       Analytics and Settings, plus shared navigation.
+       ============================================================ -->
+  <div id="app-shell" class="app-shell is-hidden">
+
+    <!-- Sidebar (desktop) / Bottom tab bar (mobile) -->
+    <nav class="app-nav" aria-label="Primary">
+      <div class="nav-brand">
+        <span class="brand-mark" aria-hidden="true">S</span>
+        <span class="nav-brand-name">SmartSpend</span>
+      </div>
+
+      <button type="button" class="nav-item is-active" data-route="dashboard">
+        <span class="nav-icon" aria-hidden="true">🏠</span><span>Dashboard</span>
+      </button>
+      <button type="button" class="nav-item" data-route="analytics">
+        <span class="nav-icon" aria-hidden="true">📊</span><span>Analytics</span>
+      </button>
+      <button type="button" class="nav-item" data-route="settings">
+        <span class="nav-icon" aria-hidden="true">⚙️</span><span>Settings</span>
+      </button>
+
+      <div class="nav-user">
+        <span class="nav-user-avatar" id="nav-user-avatar" aria-hidden="true">A</span>
+        <span class="nav-user-name" id="nav-user-name">Student</span>
+      </div>
+    </nav>
+
+    <!-- ============================================================
+         VIEW 2 — DASHBOARD (Home)
+         ============================================================ -->
+    <section id="view-dashboard" class="view route-view" data-route-view="dashboard">
+
+      <header class="page-header">
+        <div>
+          <p class="page-eyebrow" id="dashboard-date">—</p>
+          <h1>Hi, <span id="dashboard-greeting-name">Student</span>.</h1>
+        </div>
+        <button type="button" class="btn btn-ghost" id="dashboard-logout">Log out</button>
+      </header>
+
+      <!-- Budget overspend banner — hidden unless spending > budget -->
+      <div class="alert-banner is-hidden" id="overspend-banner" role="alert">
+        <span aria-hidden="true">⚠</span>
+        <span>You've gone over your monthly budget. Spending has exceeded the limit you set.</span>
+      </div>
+
+      <!-- Hero: balance + signature budget ring -->
+      <section class="hero-card">
+        <div class="hero-balance">
+          <p class="hero-label">Total balance</p>
+          <p class="hero-amount"><span class="currency">Rs.</span><span id="hero-balance-amount">0</span></p>
+          <div class="hero-stats">
+            <div>
+              <p class="hero-stat-label">Money in</p>
+              <p class="hero-stat-value money-in" id="hero-total-income">Rs. 0</p>
+            </div>
+            <div>
+              <p class="hero-stat-label">Spent</p>
+              <p class="hero-stat-value money-out" id="hero-total-expense">Rs. 0</p>
+            </div>
+            <div>
+              <p class="hero-stat-label">Monthly budget</p>
+              <p class="hero-stat-value" id="hero-budget-amount">Not set</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Signature element: circular budget gauge -->
+        <div class="budget-ring-wrap">
+          <svg class="budget-ring" viewBox="0 0 120 120" role="img" aria-labelledby="ring-desc">
+            <title id="ring-desc">Budget usage</title>
+            <circle class="ring-track" cx="60" cy="60" r="50" />
+            <circle class="ring-progress" id="ring-progress" cx="60" cy="60" r="50" />
+          </svg>
+          <div class="budget-ring-label">
+            <span id="ring-percent">0%</span>
+            <small>of budget used</small>
+          </div>
+        </div>
+      </section>
+
+      <!-- Quick actions -->
+      <section class="quick-actions" aria-label="Quick actions">
+        <button type="button" class="quick-action" id="open-money-in">
+          <span class="quick-action-icon qa-in" aria-hidden="true">＋</span>
+          <span>Money In</span>
+        </button>
+        <button type="button" class="quick-action" id="open-set-budget">
+          <span class="quick-action-icon qa-budget" aria-hidden="true">◎</span>
+          <span>Set Budget</span>
+        </button>
+        <button type="button" class="quick-action" id="open-add-expense">
+          <span class="quick-action-icon qa-out" aria-hidden="true">－</span>
+          <span>Add Expense</span>
+        </button>
+      </section>
+
+      <!-- Recent transactions -->
+      <section class="card transactions-card">
+        <div class="card-head">
+          <h2>Recent transactions</h2>
+        </div>
+        <ul class="transaction-list" id="transaction-list">
+          <!-- Populated by JS. Empty-state shown when no transactions exist. -->
+        </ul>
+        <p class="empty-state is-hidden" id="transactions-empty">No transactions yet. Add your first expense or income above.</p>
+        <button type="button" class="link-btn show-all-link" id="show-all-transactions">Show all transactions</button>
+      </section>
+    </section>
+
+
+    <!-- ============================================================
+         VIEW 3 — ANALYTICS (Reports)
+         ============================================================ -->
+    <section id="view-analytics" class="view route-view is-hidden" data-route-view="analytics">
+      <header class="page-header">
+        <div>
+          <p class="page-eyebrow">Reports</p>
+          <h1>Analytics</h1>
+        </div>
+      </header>
+
+      <div class="charts-grid">
+        <section class="card chart-card">
+          <h2>Spending by category</h2>
+          <p class="card-sub">Where this month's expenses went.</p>
+          <div class="chart-canvas-wrap"><canvas id="chart-category"></canvas></div>
+        </section>
+
+        <section class="card chart-card">
+          <h2>Daily spending</h2>
+          <p class="card-sub">Last 7 days, in Rs.</p>
+          <div class="chart-canvas-wrap"><canvas id="chart-daily"></canvas></div>
+        </section>
+
+        <section class="card chart-card chart-card-wide">
+          <h2>Monthly expense trend</h2>
+          <p class="card-sub">Total spend by month.</p>
+          <div class="chart-canvas-wrap"><canvas id="chart-trend"></canvas></div>
+        </section>
+      </div>
+    </section>
+
+
+    <!-- ============================================================
+         VIEW 4 — SETTINGS
+         ============================================================ -->
+    <section id="view-settings" class="view route-view is-hidden" data-route-view="settings">
+      <header class="page-header">
+        <div>
+          <p class="page-eyebrow">Account</p>
+          <h1>Settings</h1>
+        </div>
+      </header>
+
+      <section class="card settings-card">
+        <div class="card-head">
+          <h2>Profile</h2>
+        </div>
+        <div class="settings-row">
+          <span class="nav-user-avatar settings-avatar" id="settings-avatar" aria-hidden="true">A</span>
+          <div>
+            <p class="settings-name" id="settings-username">Student</p>
+            <p class="settings-email" id="settings-email">—</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="card settings-card">
+        <div class="card-head">
+          <h2>Currency &amp; data</h2>
+        </div>
+        <div class="settings-row settings-row-between">
+          <div>
+            <p class="settings-name">Display currency</p>
+            <p class="card-sub">Amounts are shown in Nepalese Rupees.</p>
+          </div>
+          <span class="badge">Rs. NPR</span>
+        </div>
+        <div class="settings-row settings-row-between">
+          <div>
+            <p class="settings-name">Storage</p>
+            <p class="card-sub">All data is saved locally in this browser.</p>
+          </div>
+          <span class="badge badge-muted">Local only</span>
+        </div>
+      </section>
+
+      <section class="card settings-card settings-danger-zone">
+        <div class="card-head">
+          <h2>Session</h2>
+        </div>
+        <p class="card-sub">End your current session on this device.</p>
+        <button type="button" class="btn btn-secondary" id="settings-logout">Log out</button>
+      </section>
+
+      <section class="card settings-card settings-danger-zone">
+        <div class="card-head">
+          <h2>Danger zone</h2>
+        </div>
+        <p class="card-sub">Permanently delete your account and all stored expense data. This cannot be undone.</p>
+        <button type="button" class="btn btn-danger" id="settings-delete-account">Delete account</button>
+      </section>
+    </section>
+  </div>
+
+
+  <!-- ============================================================
+       SHARED MODALS — Money In / Set Budget / Add Expense /
+       Full transaction history. Reused across the Dashboard.
+       ============================================================ -->
+
+  <!-- MONEY IN MODAL -->
+  <div class="modal-overlay is-hidden" id="modal-money-in" role="dialog" aria-modal="true" aria-labelledby="money-in-title">
+    <div class="modal-card">
+      <button class="modal-close" type="button" data-close-modal="modal-money-in" aria-label="Close">✕</button>
+      <h2 id="money-in-title">Money in</h2>
+      <p class="modal-sub">Record income — salary, freelance work, or money from family.</p>
+
+      <form id="form-money-in" class="modal-form" novalidate>
+        <div class="field">
+          <label for="mi-amount">Amount (Rs.)</label>
+           <input type="number" id="mi-amount" name="amount" min="0" step="50" required placeholder="e.g. 350" />
+        </div>
+
+        <div class="field">
+          <label for="mi-category">Category</label>
+          <select id="mi-category" name="category" required>
+            <option value="" disabled selected>Select a source</option>
+            <option value="Salary">Salary</option>
+            <option value="Investment">Investment</option>
+            <option value="Freelance">Freelance</option>
+            <option value="Given by parents">Given by parents</option>
+            <option value="Other">Other</option>
+          </select>
+        </div>
+
+        <div class="field is-hidden" id="mi-other-field">
+          <label for="mi-other-text">Describe source</label>
+          <input type="text" id="mi-other-text" name="otherText" placeholder="e.g. Scholarship refund" maxlength="40" />
+        </div>
+
+        <div class="field">
+          <label for="mi-date">Date</label>
+          <input type="date" id="mi-date" name="date" required />
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-block">Add income</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- SET BUDGET MODAL -->
+  <div class="modal-overlay is-hidden" id="modal-set-budget" role="dialog" aria-modal="true" aria-labelledby="budget-title">
+    <div class="modal-card modal-card-small">
+      <button class="modal-close" type="button" data-close-modal="modal-set-budget" aria-label="Close">✕</button>
+      <h2 id="budget-title">Set monthly budget</h2>
+      <p class="modal-sub">We'll track your spending against this limit and warn you if you go over.</p>
+
+      <form id="form-set-budget" class="modal-form" novalidate>
+        <div class="field">
+          <label for="budget-amount">Monthly limit (Rs.)</label>
+          <input type="number" id="budget-amount" name="budgetAmount" min="0" step="50" required placeholder="e.g. 15000" />
+        </div>
+        <button type="submit" class="btn btn-primary btn-block">Save budget</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ADD EXPENSE MODAL -->
+  <div class="modal-overlay is-hidden" id="modal-add-expense" role="dialog" aria-modal="true" aria-labelledby="expense-title">
+    <div class="modal-card">
+      <button class="modal-close" type="button" data-close-modal="modal-add-expense" aria-label="Close">✕</button>
+      <h2 id="expense-title">Add expense</h2>
+      <p class="modal-sub">Log a purchase so it counts toward your budget.</p>
+
+      <form id="form-add-expense" class="modal-form" novalidate>
+        <div class="field">
+          <label for="exp-amount">Amount (Rs.)</label>
+          <input type="number" id="exp-amount" name="amount" min="0" step="50" required placeholder="e.g. 350" />
+        </div>
+
+        <div class="field">
+          <label for="exp-category">Category</label>
+          <select id="exp-category" name="category" required>
+            <option value="" disabled selected>Select a category</option>
+            <option value="Education">Education</option>
+            <option value="Rent">Rent</option>
+            <option value="Transportation">Transportation</option>
+            <option value="Groceries">Groceries</option>
+            <option value="Health">Health</option>
+            <option value="Food">Food</option>
+            <option value="Shopping">Shopping</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label for="exp-subcategory">Sub-category <span style="font-weight: normal; font-size: 0.8em; color: gray;">(Optional)</span></label>
+          <select id="exp-subcategory" name="subcategory">
+            <option value="" selected>None</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label for="exp-date">Date</label>
+          <input type="date" id="exp-date" name="date" required />
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-block">Add expense</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- FULL TRANSACTION HISTORY MODAL -->
+  <div class="modal-overlay is-hidden" id="modal-all-transactions" role="dialog" aria-modal="true" aria-labelledby="all-tx-title">
+    <div class="modal-card modal-card-wide">
+      <button class="modal-close" type="button" data-close-modal="modal-all-transactions" aria-label="Close">✕</button>
+      <h2 id="all-tx-title">All transactions</h2>
+      <ul class="transaction-list transaction-list-scroll" id="all-transaction-list"></ul>
+      <p class="empty-state is-hidden" id="all-transactions-empty">No transactions yet.</p>
+    </div>
+  </div>
+
+  <!-- TOAST for lightweight confirmations -->
+  <div class="toast is-hidden" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
