@@ -17,7 +17,7 @@
   // ⚠️ DEPLOYMENT: change this to your deployed backend's URL, e.g.
   // 'https://smartspend-backend-xxxx.onrender.com/api'. Leave it as
   // localhost only while running the backend on your own machine.
-  const API_BASE = 'http://localhost:8080/api';
+  const API_BASE = 'https://smartspend-backend-11qe.onrender.com/api';
 
   const SUBCATEGORY_MAP = {
     Education: ['Tuition Fees', 'Books & Supplies', 'Exam Fees', 'Stationery', 'Other'],
