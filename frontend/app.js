@@ -1,18 +1,10 @@
 /* ==========================================================================
    SmartSpend — Application Logic
    --------------------------------------------------------------------------
-   Architecture notes for future backend integration:
-   - All data access is isolated in the `DataStore` object below. Every
-     method currently reads/writes localStorage. To connect a real backend
-     (Python/Flask/Django + SQL or MongoDB), you only need to rewrite the
-     bodies of `DataStore` methods to call `fetch()` against your API —
-     nothing else in this file should need to change, since the rest of
-     the app only ever talks to `DataStore`.
-   - Each place a backend call would go is marked with:
-       // BACKEND HOOK: ...
-   - Forms are validated on the client (HTML5 + JS) but a real backend
-     MUST re-validate everything server-side. Client validation is a UX
-     convenience, never a security boundary by itself.
+   Talks to the SmartSpend Spring Boot API (see /smartspend-backend) for
+   auth and data. All network access is isolated in `apiFetch` and the
+   `DataStore` object below — nothing else in this file touches fetch()
+   directly.
    ========================================================================== */
 
 (() => {
@@ -21,6 +13,11 @@
   /* ========================================================================
      0. CONSTANTS
      ======================================================================== */
+
+  // ⚠️ DEPLOYMENT: change this to your deployed backend's URL, e.g.
+  // 'https://smartspend-backend-xxxx.onrender.com/api'. Leave it as
+  // localhost only while running the backend on your own machine.
+  const API_BASE = 'http://localhost:8080/api';
 
   const SUBCATEGORY_MAP = {
     Education: ['Tuition Fees', 'Books & Supplies', 'Exam Fees', 'Stationery', 'Other'],
@@ -47,171 +44,161 @@
   const TOAST_DURATION_MS = 2600;
 
   /* ========================================================================
-     1. DATA STORE
+     1. DATA STORE — talks to the Spring Boot API over fetch().
      ------------------------------------------------------------------------
-     Thin wrapper around localStorage, namespaced per username so multiple
-     students sharing a device get isolated data (per the project's
-     multi-user requirement). Swap method bodies for fetch() calls to move
-     to a real backend without touching any other code in this file.
+     The JWT + basic profile for the signed-in user live in sessionStorage
+     (so a reload keeps you logged in, but closing the tab logs you out —
+     same behavior as the earlier prototype). The token itself is only ever
+     read from sessionStorage right before a request; it's never persisted
+     anywhere else.
      ======================================================================== */
+
+  const SESSION_KEY = 'smartspend_session';
+
+  /** Low-level fetch wrapper: adds the JSON content-type + bearer token,
+   *  parses the response, and throws a plain Error with a user-facing
+   *  message on any failure so callers can catch() and show a toast. */
+  async function apiFetch(path, { method = 'GET', body, auth = true } = {}) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (auth) {
+      const session = DataStore.getSession();
+      if (session?.token) headers.Authorization = `Bearer ${session.token}`;
+    }
+
+    let response;
+    try {
+      response = await fetch(`${API_BASE}${path}`, {
+        method,
+        headers,
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      });
+    } catch (networkErr) {
+      throw new Error('Could not reach the server. Is the backend running?');
+    }
+
+    if (response.status === 204) return null;
+
+    let data = null;
+    try {
+      data = await response.json();
+    } catch (_) {
+      // No JSON body (e.g. some error pages) — fall through with data = null.
+    }
+
+    if (!response.ok) {
+      // A 401 on an authenticated call almost always means the token
+      // expired or was revoked server-side — bounce back to the login
+      // screen instead of leaving the UI stuck showing a failed request.
+      if (response.status === 401 && auth) {
+        DataStore.clearSession();
+        App.exitToAuth();
+        showToast(data?.error || 'Your session has expired. Please log in again.');
+      }
+      throw new Error(data?.error || `Request failed (${response.status}).`);
+    }
+
+    return data;
+  }
 
   const DataStore = {
     // ---- Auth ----
 
-    /** Returns the users table: { username: { passwordHash, email, createdAt } } */
-    _getUsersTable() {
-      // BACKEND HOOK: replace with `return fetch('/api/users').then(r => r.json())`
-      const raw = localStorage.getItem('smartspend_users');
-      return raw ? JSON.parse(raw) : {};
-    },
-
-    _saveUsersTable(table) {
-      localStorage.setItem('smartspend_users', JSON.stringify(table));
-    },
-
-    /** Extremely lightweight obfuscation so plaintext passwords aren't sitting
-     *  in localStorage. NOT cryptographically secure — a real backend must
-     *  hash passwords server-side (e.g. bcrypt/argon2) and never trust the
-     *  client for this. */
-    _hash(password) {
-      let hash = 0;
-      for (let i = 0; i < password.length; i++) {
-        hash = (hash << 5) - hash + password.charCodeAt(i);
-        hash |= 0;
+    async registerUser({ username, email, password }) {
+      try {
+        const data = await apiFetch('/auth/register', {
+          method: 'POST',
+          auth: false,
+          body: { username, email, password },
+        });
+        return { ok: true, token: data.token, user: { username: data.username, email: data.email } };
+      } catch (err) {
+        return { ok: false, error: err.message };
       }
-      return `h_${hash}_${password.length}`;
     },
 
-    registerUser({ username, email, password }) {
-      // BACKEND HOOK: POST /api/auth/register { username, email, password }
-      const users = this._getUsersTable();
-      const key = username.toLowerCase();
-      if (users[key]) {
-        return { ok: false, error: 'That username is already taken.' };
+    async loginUser({ username, password }) {
+      try {
+        const data = await apiFetch('/auth/login', {
+          method: 'POST',
+          auth: false,
+          body: { usernameOrEmail: username, password },
+        });
+        return { ok: true, token: data.token, user: { username: data.username, email: data.email } };
+      } catch (err) {
+        return { ok: false, error: err.message };
       }
-      users[key] = {
-        username,
-        email,
-        passwordHash: this._hash(password),
-        createdAt: new Date().toISOString(),
-      };
-      this._saveUsersTable(users);
-      return { ok: true };
     },
 
-    loginUser({ username, password }) {
-      // BACKEND HOOK: POST /api/auth/login { username, password } -> { token }
-      const users = this._getUsersTable();
-      const searchKey = username.toLowerCase().trim();
-      
-      // 1. Try to find the user by their exact username
-      let user = users[searchKey];
-
-      // 2. If not found, try searching by their registered email
-      if (!user) {
-        const foundKey = Object.keys(users).find(
-          key => users[key].email.toLowerCase() === searchKey
-        );
-        if (foundKey) {
-          user = users[foundKey];
-        }
+    async findUserForReset(username) {
+      try {
+        const data = await apiFetch('/auth/forgot/find', {
+          method: 'POST',
+          auth: false,
+          body: { username },
+        });
+        return { username: data.username };
+      } catch (err) {
+        return null;
       }
+    },
 
-      if (!user) return { ok: false, error: 'No account found with that username or email.' };
-      
-      if (user.passwordHash !== this._hash(password)) {
-        return { ok: false, error: 'Incorrect password. Please try again.' };
+    async resetPassword(username, newPassword) {
+      try {
+        await apiFetch('/auth/forgot/reset', {
+          method: 'POST',
+          auth: false,
+          body: { username, newPassword },
+        });
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, error: err.message };
       }
-      
-      return { ok: true, user: { username: user.username, email: user.email } };
     },
 
-    findUserForReset(username) {
-      const users = this._getUsersTable();
-      return users[username.toLowerCase()] || null;
+    async deleteAccount(password) {
+      await apiFetch('/users/me', { method: 'DELETE', body: { password } });
     },
 
-    resetPassword(username, newPassword) {
-      // BACKEND HOOK: POST /api/auth/reset-password { username, newPassword }
-      const users = this._getUsersTable();
-      const key = username.toLowerCase();
-      if (!users[key]) return { ok: false, error: 'Account not found.' };
-      users[key].passwordHash = this._hash(newPassword);
-      this._saveUsersTable(users);
-      return { ok: true };
-    },
-
-    deleteUser(username) {
-      // BACKEND HOOK: DELETE /api/users/:username
-      const users = this._getUsersTable();
-      delete users[username.toLowerCase()];
-      this._saveUsersTable(users);
-      localStorage.removeItem(this._userNamespace(username));
-    },
-
-    // ---- Session ----
+    // ---- Session (local only — the JWT + a bit of profile info for this tab) ----
 
     getSession() {
-      const raw = sessionStorage.getItem('smartspend_session');
+      const raw = sessionStorage.getItem(SESSION_KEY);
       return raw ? JSON.parse(raw) : null;
     },
 
-    setSession(user) {
-      // BACKEND HOOK: store the auth token returned by the login endpoint
-      // instead of the raw user object.
-      sessionStorage.setItem('smartspend_session', JSON.stringify(user));
+    setSession(session) {
+      sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
     },
 
     clearSession() {
-      sessionStorage.removeItem('smartspend_session');
+      sessionStorage.removeItem(SESSION_KEY);
     },
 
-    // ---- Per-user namespaced data (expenses, income, budget) ----
+    // ---- Transactions ----
 
-    _userNamespace(username) {
-      return `smartspend_data_${username.toLowerCase()}`;
+    async getTransactions() {
+      return await apiFetch('/transactions');
     },
 
-    _getUserData(username) {
-      // BACKEND HOOK: GET /api/users/:username/data
-      const raw = localStorage.getItem(this._userNamespace(username));
-      return raw ? JSON.parse(raw) : { transactions: [], budget: null };
+    async addTransaction(transaction) {
+      return await apiFetch('/transactions', { method: 'POST', body: transaction });
     },
 
-    _saveUserData(username, data) {
-      // BACKEND HOOK: PUT /api/users/:username/data
-      localStorage.setItem(this._userNamespace(username), JSON.stringify(data));
+    async deleteTransaction(transactionId) {
+      await apiFetch(`/transactions/${transactionId}`, { method: 'DELETE' });
     },
 
-    getTransactions(username) {
-      return this._getUserData(username).transactions;
+    // ---- Budget ----
+
+    async getBudget() {
+      return await apiFetch('/budget'); // null if no budget set (204)
     },
 
-    addTransaction(username, transaction) {
-      // BACKEND HOOK: POST /api/users/:username/transactions
-      const data = this._getUserData(username);
-      data.transactions.unshift(transaction);
-      this._saveUserData(username, data);
-    },
-
-    deleteTransaction(username, transactionId) {
-      // BACKEND HOOK: DELETE /api/users/:username/transactions/:id
-      const data = this._getUserData(username);
-      data.transactions = data.transactions.filter(t => t.id !== transactionId);
-      this._saveUserData(username, data);
-    },
-
-    getBudget(username) {
-      return this._getUserData(username).budget;
-    },
-
-    setBudget(username, amount) {
-      // BACKEND HOOK: PUT /api/users/:username/budget { amount }
-      const data = this._getUserData(username);
-      data.budget = { amount, setAt: new Date().toISOString() };
-      this._saveUserData(username, data);
+    async setBudget(amount) {
+      return await apiFetch('/budget', { method: 'PUT', body: { amount } });
     },
   };
+
 
   /* ========================================================================
      2. HELPERS
@@ -350,7 +337,7 @@
       const validateUsername = wireFieldValidation(username);
       const validatePassword = wireFieldValidation(password);
 
-      form.addEventListener('submit', (e) => {
+      form.addEventListener('submit', async (e) => {
         e.preventDefault();
         message.textContent = '';
         message.classList.remove('is-success');
@@ -362,17 +349,20 @@
           return;
         }
 
-        const result = DataStore.loginUser({
+        const submitBtn = form.querySelector('button[type="submit"]');
+        submitBtn.disabled = true;
+        const result = await DataStore.loginUser({
           username: username.value.trim(),
           password: password.value,
         });
+        submitBtn.disabled = false;
 
         if (!result.ok) {
           message.textContent = result.error;
           return;
         }
 
-        DataStore.setSession(result.user);
+        DataStore.setSession({ token: result.token, username: result.user.username, email: result.user.email });
         App.enterApp(result.user);
       });
     },
@@ -392,7 +382,7 @@
         wireFieldValidation(confirm),
       ];
 
-      form.addEventListener('submit', (e) => {
+      form.addEventListener('submit', async (e) => {
         e.preventDefault();
         message.textContent = '';
         message.classList.remove('is-success');
@@ -409,11 +399,14 @@
           return;
         }
 
-        const result = DataStore.registerUser({
+        const submitBtn = form.querySelector('button[type="submit"]');
+        submitBtn.disabled = true;
+        const result = await DataStore.registerUser({
           username: username.value.trim(),
           email: email.value.trim(),
           password: password.value,
         });
+        submitBtn.disabled = false;
 
         if (!result.ok) {
           message.textContent = result.error;
@@ -424,8 +417,8 @@
         message.textContent = 'Account created! Logging you in…';
 
         setTimeout(() => {
-          DataStore.setSession({ username: username.value.trim(), email: email.value.trim() });
-          App.enterApp({ username: username.value.trim(), email: email.value.trim() });
+          DataStore.setSession({ token: result.token, username: result.user.username, email: result.user.email });
+          App.enterApp(result.user);
         }, 600);
       });
     },
@@ -449,10 +442,13 @@
         openModal('modal-forgot');
       });
 
-      findForm.addEventListener('submit', (e) => {
+      findForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         const usernameInput = $('#forgot-username');
-        const user = DataStore.findUserForReset(usernameInput.value.trim());
+        const submitBtn = findForm.querySelector('button[type="submit"]');
+        submitBtn.disabled = true;
+        const user = await DataStore.findUserForReset(usernameInput.value.trim());
+        submitBtn.disabled = false;
 
         if (!user) {
           findMessage.textContent = 'We could not find an account with that username.';
@@ -466,7 +462,7 @@
         resetForm.classList.remove('is-hidden');
       });
 
-      resetForm.addEventListener('submit', (e) => {
+      resetForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         const newPassword = $('#forgot-new-password');
         const confirmPassword = $('#forgot-new-password-confirm');
@@ -481,7 +477,11 @@
           return;
         }
 
-        DataStore.resetPassword(targetUsername, newPassword.value);
+        const result = await DataStore.resetPassword(targetUsername, newPassword.value);
+        if (!result.ok) {
+          $('#forgot-found-msg').textContent = result.error;
+          return;
+        }
         closeModal('modal-forgot');
         showToast('Password updated. You can log in now.');
 
@@ -493,11 +493,16 @@
 
     wirePasswordVisibility() {
       $$('.pw-toggle').forEach(btn => {
+        const eyeIcon = btn.querySelector('.icon-eye');
+        const eyeOffIcon = btn.querySelector('.icon-eye-off');
         btn.addEventListener('click', () => {
           const target = $(`#${btn.dataset.target}`);
           const isPassword = target.type === 'password';
           target.type = isPassword ? 'text' : 'password';
-          btn.textContent = isPassword ? '🙈' : '👁';
+          // isPassword true => we just revealed it, so show the open eye
+          // and swap to the "eye-off" icon for the next click (to hide again).
+          eyeIcon.classList.toggle('is-hidden', isPassword);
+          eyeOffIcon.classList.toggle('is-hidden', !isPassword);
           btn.setAttribute('aria-label', isPassword ? 'Hide password' : 'Show password');
         });
       });
@@ -509,12 +514,12 @@
      ======================================================================== */
 
   const Dashboard = {
-    init() {
+    async init() {
       this.renderHeader();
       this.wireQuickActions();
       this.wireModalForms();
       this.wireLogout();
-      this.render();
+      await this.render();
     },
 
     renderHeader() {
@@ -530,12 +535,20 @@
 
     /** Recomputes balance, budget ring, and transaction list from DataStore.
      *  Called after every add/delete so the UI always reflects current data. */
-    render() {
+    async render() {
       const session = DataStore.getSession();
       if (!session) return;
 
-      const transactions = DataStore.getTransactions(session.username);
-      const budget = DataStore.getBudget(session.username);
+      let transactions, budget;
+      try {
+        [transactions, budget] = await Promise.all([
+          DataStore.getTransactions(),
+          DataStore.getBudget(),
+        ]);
+      } catch (err) {
+        showToast(err.message);
+        return;
+      }
 
       const totalIncome = transactions
         .filter(t => t.type === 'income')
@@ -627,19 +640,22 @@
 
       // Wire delete buttons for this render pass.
       $$('.tx-delete', list).forEach(btn => {
-        btn.addEventListener('click', () => {
+        btn.addEventListener('click', async () => {
           // 1. Show the confirmation popup
           const isConfirmed = confirm("Are you sure you want to delete this transaction?");
-          
+
           // 2. If the user clicks "Cancel", stop right here
-          if (!isConfirmed) return; 
+          if (!isConfirmed) return;
 
           // 3. Otherwise, proceed with the deletion
-          const session = DataStore.getSession();
-          DataStore.deleteTransaction(session.username, btn.dataset.txId);
-          showToast('Transaction deleted.');
-          Dashboard.render();
-          Analytics.renderIfActive();
+          try {
+            await DataStore.deleteTransaction(btn.dataset.txId);
+            showToast('Transaction deleted.');
+            await Dashboard.render();
+            await Analytics.renderIfActive();
+          } catch (err) {
+            showToast(err.message);
+          }
         });
       });
     },
@@ -652,9 +668,13 @@
         setTimeout(() => $('#mi-amount').focus(), 100); 
       });
       
-      $('#open-set-budget').addEventListener('click', () => {
-        const session = DataStore.getSession();
-        const budget = DataStore.getBudget(session.username);
+      $('#open-set-budget').addEventListener('click', async () => {
+        let budget = null;
+        try {
+          budget = await DataStore.getBudget();
+        } catch (err) {
+          showToast(err.message);
+        }
         $('#budget-amount').value = budget ? budget.amount : '';
         openModal('modal-set-budget');
         // Auto-focus the Budget input
@@ -703,14 +723,13 @@
         otherInput.required = false; // optional text input, per spec
       });
 
-      form.addEventListener('submit', (e) => {
+      form.addEventListener('submit', async (e) => {
         e.preventDefault();
         if (!form.checkValidity()) {
           form.reportValidity();
           return;
         }
 
-        const session = DataStore.getSession();
         const amount = parseFloat($('#mi-amount').value);
 
         if (!(amount > 0)) {
@@ -718,35 +737,41 @@
           return;
         }
 
-        DataStore.addTransaction(session.username, {
-          id: uid(),
-          type: 'income',
-          amount,
-          category: categorySelect.value,
-          otherText: otherInput.value.trim() || null,
-          date: $('#mi-date').value,
-          createdAt: new Date().toISOString(),
-        });
+        const submitBtn = form.querySelector('button[type="submit"]');
+        submitBtn.disabled = true;
+        try {
+          await DataStore.addTransaction({
+            type: 'income',
+            amount,
+            category: categorySelect.value,
+            otherText: otherInput.value.trim() || null,
+            date: $('#mi-date').value,
+          });
+        } catch (err) {
+          submitBtn.disabled = false;
+          showToast(err.message);
+          return;
+        }
+        submitBtn.disabled = false;
 
         form.reset();
         otherField.classList.add('is-hidden');
         closeModal('modal-money-in');
         showToast('Income added.');
-        Dashboard.render();
-        Analytics.renderIfActive();
+        await Dashboard.render();
+        await Analytics.renderIfActive();
       });
     },
 
     wireBudgetForm() {
       const form = $('#form-set-budget');
-      form.addEventListener('submit', (e) => {
+      form.addEventListener('submit', async (e) => {
         e.preventDefault();
         if (!form.checkValidity()) {
           form.reportValidity();
           return;
         }
 
-        const session = DataStore.getSession();
         const amount = parseFloat($('#budget-amount').value);
 
         if (!(amount > 0)) {
@@ -757,7 +782,13 @@
         // Guard against accidentally overwriting an existing budget silently —
         // the prompt specifically calls out avoiding bugs around "already
         // existing budget", so we confirm before replacing a prior value.
-        const existing = DataStore.getBudget(session.username);
+        let existing = null;
+        try {
+          existing = await DataStore.getBudget();
+        } catch (err) {
+          showToast(err.message);
+          return;
+        }
         if (existing && existing.amount !== amount) {
           const confirmed = confirm(
             `You already have a budget of Rs. ${formatMoney(existing.amount)} set. Replace it with Rs. ${formatMoney(amount)}?`
@@ -765,11 +796,17 @@
           if (!confirmed) return;
         }
 
-        DataStore.setBudget(session.username, amount);
+        try {
+          await DataStore.setBudget(amount);
+        } catch (err) {
+          showToast(err.message);
+          return;
+        }
+
         form.reset();
         closeModal('modal-set-budget');
         showToast('Budget saved.');
-        Dashboard.render();
+        await Dashboard.render();
       });
     },
 
@@ -784,14 +821,13 @@
           + options.map(opt => `<option value="${escapeHtml(opt)}">${escapeHtml(opt)}</option>`).join('');
       });
 
-      form.addEventListener('submit', (e) => {
+      form.addEventListener('submit', async (e) => {
         e.preventDefault();
         if (!form.checkValidity()) {
           form.reportValidity();
           return;
         }
 
-        const session = DataStore.getSession();
         const amount = parseFloat($('#exp-amount').value);
 
         if (!(amount > 0)) {
@@ -799,22 +835,29 @@
           return;
         }
 
-        DataStore.addTransaction(session.username, {
-          id: uid(),
-          type: 'expense',
-          amount,
-          category: categorySelect.value,
-          subcategory: subcategorySelect.value,
-          date: $('#exp-date').value,
-          createdAt: new Date().toISOString(),
-        });
+        const submitBtn = form.querySelector('button[type="submit"]');
+        submitBtn.disabled = true;
+        try {
+          await DataStore.addTransaction({
+            type: 'expense',
+            amount,
+            category: categorySelect.value,
+            subcategory: subcategorySelect.value,
+            date: $('#exp-date').value,
+          });
+        } catch (err) {
+          submitBtn.disabled = false;
+          showToast(err.message);
+          return;
+        }
+        submitBtn.disabled = false;
 
         form.reset();
         subcategorySelect.innerHTML = '<option value="" selected>None</option>';
         closeModal('modal-add-expense');
         showToast('Expense added.');
-        Dashboard.render();
-        Analytics.renderIfActive();
+        await Dashboard.render();
+        await Analytics.renderIfActive();
       });
     },
   };
@@ -839,23 +882,30 @@
     /** Builds three charts from the user's real transaction data when
      *  available, falling back to realistic dummy data so the page always
      *  looks populated (per the brief's request for sample data to preview). */
-    init() {
+    async init() {
       this.initialized = true;
-      this.render();
+      await this.render();
     },
 
-    renderIfActive() {
+    async renderIfActive() {
       // Re-render only if the analytics view is currently visible, so we
       // don't do unnecessary chart work while the user is on another page.
       const view = $('#view-analytics');
       if (this.initialized && view && !view.classList.contains('is-hidden')) {
-        this.render();
+        await this.render();
       }
     },
 
-    render() {
+    async render() {
       const session = DataStore.getSession();
-      const transactions = session ? DataStore.getTransactions(session.username) : [];
+      let transactions = [];
+      if (session) {
+        try {
+          transactions = await DataStore.getTransactions();
+        } catch (err) {
+          showToast(err.message);
+        }
+      }
       const expenses = transactions.filter(t => t.type === 'expense');
 
       this.renderCategoryChart(expenses);
@@ -1023,8 +1073,10 @@
     },
 
     /** Two-step confirmation to prevent accidental destructive clicks:
-     *  a standard confirm(), then a typed confirmation of the username. */
-    handleDeleteAccount() {
+     *  a standard confirm(), then re-entering the account password (verified
+     *  server-side) so a logged-in-but-unattended session can't be used to
+     *  wipe the account without actually knowing the password. */
+    async handleDeleteAccount() {
       const session = DataStore.getSession();
       if (!session) return;
 
@@ -1033,13 +1085,16 @@
       );
       if (!firstConfirm) return;
 
-      const typed = prompt(`To confirm, type your username ("${session.username}") exactly:`);
-      if (typed !== session.username) {
-        showToast('Account deletion cancelled — username did not match.');
+      const password = prompt('To confirm, enter your password:');
+      if (password === null) return; // user clicked Cancel
+
+      try {
+        await DataStore.deleteAccount(password);
+      } catch (err) {
+        showToast(err.message);
         return;
       }
 
-      DataStore.deleteUser(session.username);
       DataStore.clearSession();
       showToast('Account deleted.');
       App.exitToAuth();
@@ -1051,13 +1106,21 @@
      ======================================================================== */
 
   const App = {
-    init() {
+    async init() {
       AuthView.init();
       this.wireNav();
 
       const session = DataStore.getSession();
       if (session) {
-        this.enterApp(session, { skipAuthAnimation: true });
+        // A token from a previous visit could have expired since then —
+        // confirm it's still good before trusting it, otherwise the user
+        // would see a blank/broken app instead of the login screen.
+        try {
+          await apiFetch('/users/me');
+          await this.enterApp(session, { skipAuthAnimation: true });
+        } catch (err) {
+          DataStore.clearSession();
+        }
       }
     },
 
@@ -1067,16 +1130,16 @@
       });
     },
 
-    navigateTo(route) {
+    async navigateTo(route) {
       $$('.nav-item').forEach(btn => btn.classList.toggle('is-active', btn.dataset.route === route));
       $$('.route-view').forEach(view => view.classList.toggle('is-hidden', view.dataset.routeView !== route));
 
-      if (route === 'analytics') Analytics.renderIfActive();
-      if (route === 'dashboard') Dashboard.render();
+      if (route === 'analytics') await Analytics.renderIfActive();
+      if (route === 'dashboard') await Dashboard.render();
       if (route === 'settings') Settings.render();
     },
 
-    enterApp(user) {
+    async enterApp(user) {
       $('#view-auth').classList.add('is-hidden');
       $('#app-shell').classList.remove('is-hidden');
 
@@ -1084,16 +1147,17 @@
       $('#nav-user-avatar').textContent = initial;
       $('#nav-user-name').textContent = user.username;
 
-      Dashboard.init();
-      Analytics.init();
+      await Dashboard.init();
+      await Analytics.init();
       Settings.init();
-      this.navigateTo('dashboard');
+      await this.navigateTo('dashboard');
     },
 
     logout() {
-      // BACKEND HOOK: POST /api/auth/logout (invalidate token server-side).
-      // Per the project brief: logout clears session state but preserves
-      // localStorage data, so the user's history is intact on next login.
+      // Stateless JWTs aren't revoked server-side on logout (there's no
+      // session to invalidate) — this just discards the token locally.
+      // The account's transactions and budget remain in the database for
+      // next time they log in.
       DataStore.clearSession();
       this.exitToAuth();
       showToast('Logged out.');

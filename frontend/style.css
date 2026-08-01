@@ -249,14 +249,26 @@ a { color: var(--primary); }
   right: 0.5rem;
   top: 50%;
   transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: none;
   border: none;
-  font-size: 1rem;
   opacity: 0.6;
   padding: 0.3rem;
   border-radius: 6px;
 }
 .pw-toggle:hover { opacity: 1; background: var(--surface-sage); }
+.pw-toggle .icon-eye,
+.pw-toggle .icon-eye-off {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: var(--ink-soft);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
 
 /* ==========================================================================
    VIEW 1 — Auth page
